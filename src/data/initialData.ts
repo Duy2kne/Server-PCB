@@ -9,7 +9,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     priceEstimate: 'Liên hệ theo số lượng',
     shortDesc: 'Điều khiển nhiệt độ hồ cá và thiết bị làm lạnh mini qua WiFi/App, cảm biến nhiệt độ chính xác cao, ngõ ra MOSFET công suất và Relay kép.',
     fullDesc: 'Giải pháp bo mạch điều khiển Chiller Mini 12V tối ưu cho hồ thủy sinh, tủ bảo quản mẫu sinh học hoặc hệ thống tản nhiệt Peltier. Sử dụng vi điều khiển ESP32 32-bit lõi kép hỗ trợ kết nối WiFi/BLE, tích hợp web server nội bộ và điều khiển qua app điện thoại. Bo mạch được thiết kế cách ly hoàn toàn giữa khối logic và khối công suất tải cao, chống nhiễu tuyệt đối và có cơ chế giám sát dòng quá tải.',
-    imageUrl: '/src/assets/images/chiller_esp32_board_1792125857487.jpg',
+    imageUrl: 'images/chiller_esp32_board_1792125857487.jpg',
     updatedAt: '2026-10-12',
     featured: true,
     specs: [
@@ -35,7 +35,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     priceEstimate: 'Liên hệ báo giá kỹ thuật',
     shortDesc: 'Sử dụng IC chuyên dụng nhận diện mực nước que thấp - que cao, tự động cấp nước và bảo vệ chống cháy thanh nhiệt (Heater).',
     fullDesc: 'Bo mạch điều khiển cấp nước và bảo vệ an toàn cho nồi hơi công nghiệp, nồi nấu phở, máy xông hơi hoặc buồng hấp tiệt trùng. Mạch ứng dụng nguyên lý dẫn điện của nước với dòng xoay chiều tần số cao để chống hiện tượng điện phân mòn que dò inox. Tích hợp thuật toán chống sóng sánh mặt nước, tự động bật máy bơm cấp nước khi dưới que thấp và dừng khi chạm que cao, ngắt ngay nguồn thanh nhiệt khi cạn nước.',
-    imageUrl: '/src/assets/images/boiler_controller_pcb_1792125859286.jpg',
+    imageUrl: 'images/boiler_controller_pcb_1792125859286.jpg',
     updatedAt: '2026-10-10',
     featured: true,
     specs: [
@@ -61,7 +61,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     priceEstimate: 'Liên hệ cấu hình I/O',
     shortDesc: 'Bộ điều khiển truyền thông công nghiệp thu thập dữ liệu Modbus RTU/TCP, đẩy dữ liệu lên Cloud SCADA và giám sát qua Web.',
     fullDesc: 'Gateway IoT công nghiệp chuẩn gá DIN-Rail hỗ trợ thu thập dữ liệu từ các cảm biến nhiệt ẩm, đồng hồ điện tử và biến tần qua RS485 Modbus RTU. Xử lý dữ liệu tại biên (Edge Computing) và truyền lên máy chủ Web Dashboard qua cổng Ethernet hoặc mạng 4G/LTE. Thiết kế đạt tiêu chuẩn chống sốc điện công nghiệp surge 2kV và cách ly quang.',
-    imageUrl: '/src/assets/images/automation_software_pcb_1792125859834.jpg',
+    imageUrl: 'images/automation_software_pcb_1792125859834.jpg',
     updatedAt: '2026-10-08',
     featured: true,
     specs: [
@@ -87,7 +87,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     priceEstimate: 'Theo quy mô dây chuyền',
     shortDesc: 'Tool tự động thu thập dữ liệu sản xuất, điều khiển thiết bị và xuất báo cáo tự động trên nền tảng PC và Web SCADA.',
     fullDesc: 'Nền tảng phần mềm SCADA & IoT công nghiệp thu thập dữ liệu sản xuất thời gian thực từ PLC, vi điều khiển bo mạch nhúng, cảm biến và cân định lượng. Cung cấp bảng điều khiển (Dashboard) trực quan theo dõi sản lượng OEE, cảnh báo sự cố qua Telegram/Zalo, điều khiển từ xa quy trình đóng mở van và động cơ với độ trễ thấp.',
-    imageUrl: '/src/assets/images/automation_software_pcb_1792125859834.jpg',
+    imageUrl: 'images/automation_software_pcb_1792125859834.jpg',
     updatedAt: '2026-10-05',
     featured: true,
     specs: [
@@ -113,7 +113,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     priceEstimate: 'Liên hệ số lượng gia công SMT',
     shortDesc: 'Mạch hạ áp cách ly công nghiệp 24VDC sang 5V/3A và 3.3V/2A với bộ lọc EMC Class B và bảo vệ chống đột biến điện áp.',
     fullDesc: 'Bo nguồn chuyển đổi DC-DC cách ly galvanically thiết kế phục vụ tủ điện điều khiển công nghiệp, PLC và hệ thống nhúng giao tiếp Modbus/RS485. Tối ưu diện tích mạch trên chuẩn bo 4 lớp, cuộn cảm shielding cao cấp đảm bảo gợn điện áp (ripple noise) dưới 20mVpp.',
-    imageUrl: '/src/assets/images/hero_pcb_automation_1792125856876.jpg',
+    imageUrl: 'images/hero_pcb_automation_1792125856876.jpg',
     updatedAt: '2026-10-01',
     featured: false,
     specs: [
