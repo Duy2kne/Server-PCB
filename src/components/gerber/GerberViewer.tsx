@@ -47,6 +47,7 @@ interface GerberViewerProps {
     layers: number;
     quantity: number;
     estimatedPriceVnd: number;
+    files?: File[];
   }) => void;
 }
 
@@ -159,6 +160,8 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
   const recolorSeq = useRef(0);
 
   // Tải 1 tệp nén (.zip/.rar) hoặc nhiều tệp lớp Gerber/Excellon rời
+  const sourceFilesRef = useRef<File[]>([]);
+
   const handleFileUpload = async (files: File[]) => {
     if (files.length === 0) return;
     recolorSeq.current++;
@@ -167,6 +170,7 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
 
     try {
       const result = await parseGerberFiles(files, stackupColorsFor(selectedColor, selectedFinish));
+      sourceFilesRef.current = files;
       setParsedBoard(result);
       setBoardWidth(parseFloat(result.widthMm.toFixed(2)));
       setBoardHeight(parseFloat(result.heightMm.toFixed(2)));
@@ -268,6 +272,8 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
         layers: layersCount,
         quantity,
         estimatedPriceVnd: pricing.totalVnd,
+        // Gửi kèm đúng tệp khách đã nạp để kỹ sư nhận được file Gerber thật
+        files: sourceFilesRef.current,
       });
     }
   };
