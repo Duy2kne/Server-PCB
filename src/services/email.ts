@@ -1,17 +1,51 @@
-import { WEB3FORMS_ACCESS_KEY } from '../config';
+import { QUOTE_APPS_SCRIPT_URL, WEB3FORMS_ACCESS_KEY } from '../config';
 import type { QuoteRequest } from '../types';
+import { bytesToBase64 } from './github';
 
 /**
- * Gửi yêu cầu báo giá về email chủ website qua Web3Forms (web tĩnh không tự gửi mail được).
- * Thư được gửi tới email đã đăng ký với Access Key; bấm "Trả lời" là trả lời thẳng cho khách.
+ * Gửi yêu cầu báo giá về email chủ website (web tĩnh không tự gửi mail được).
+ *  - Có QUOTE_APPS_SCRIPT_URL: gửi qua Google Apps Script → tệp khách lưu vào Google Drive của bạn
+ *    và được đính kèm email (xem scripts/google-apps-script.gs).
+ *  - Chỉ có WEB3FORMS_ACCESS_KEY: gửi qua Web3Forms, email chỉ ghi TÊN tệp (gói miễn phí không đính kèm được).
  */
 
-export const isEmailConfigured = () => WEB3FORMS_ACCESS_KEY.trim().length > 0;
+/** Giới hạn khớp với Apps Script: tổng 25 MB, tối đa 10 tệp */
+export const MAX_QUOTE_FILES = 10;
+export const MAX_QUOTE_TOTAL_BYTES = 25 * 1024 * 1024;
 
-export async function sendQuoteEmail(quote: QuoteRequest): Promise<void> {
-  if (!isEmailConfigured()) throw new Error('Chưa cấu hình WEB3FORMS_ACCESS_KEY');
+export const canSendFiles = () => QUOTE_APPS_SCRIPT_URL.trim().length > 0;
+export const isEmailConfigured = () => canSendFiles() || WEB3FORMS_ACCESS_KEY.trim().length > 0;
 
-  const files = quote.attachedFiles.length
+export async function sendQuoteEmail(quote: QuoteRequest, files: File[] = []): Promise<void> {
+  if (canSendFiles()) return sendViaAppsScript(quote, files);
+  if (WEB3FORMS_ACCESS_KEY.trim()) return sendViaWeb3Forms(quote);
+  throw new Error('Chưa cấu hình QUOTE_APPS_SCRIPT_URL hoặc WEB3FORMS_ACCESS_KEY');
+}
+
+async function sendViaAppsScript(quote: QuoteRequest, files: File[]) {
+  const payload = {
+    quote,
+    files: await Promise.all(
+      files.map(async f => ({
+        name: f.name,
+        type: f.type || 'application/octet-stream',
+        data: bytesToBase64(new Uint8Array(await f.arrayBuffer())),
+      }))
+    ),
+  };
+
+  // text/plain để trình duyệt không gửi preflight CORS (Apps Script không trả lời OPTIONS)
+  const res = await fetch(QUOTE_APPS_SCRIPT_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload),
+  });
+  const data = (await res.json().catch(() => null)) as { success?: boolean; message?: string } | null;
+  if (!res.ok || !data?.success) throw new Error(data?.message || `HTTP ${res.status}`);
+}
+
+async function sendViaWeb3Forms(quote: QuoteRequest) {
+  const fileNames = quote.attachedFiles.length
     ? quote.attachedFiles.map(f => `${f.name} (${f.size})`).join('\n')
     : 'Không có';
 
@@ -33,7 +67,7 @@ export async function sendQuoteEmail(quote: QuoteRequest): Promise<void> {
       'Số lượng dự kiến': quote.quantityEstimate,
       'Tiến độ mong muốn': quote.timeline,
       'Yêu cầu kỹ thuật': quote.requirements,
-      'Tệp khách đã chọn (chưa đính kèm, hãy xin khách gửi qua email/Zalo)': files,
+      'Tệp khách đã chọn (chưa đính kèm, hãy xin khách gửi qua email/Zalo)': fileNames,
     }),
   });
 
