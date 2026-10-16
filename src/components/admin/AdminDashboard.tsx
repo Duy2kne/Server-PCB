@@ -17,7 +17,8 @@ import {
   Mail,
   Building,
   Check,
-  AlertCircle
+  AlertCircle,
+  LogOut
 } from 'lucide-react';
 import { Product, QuoteRequest, CompanySettings, QuoteStatus } from '../../types';
 import { StorageService } from '../../services/storage';
@@ -29,6 +30,7 @@ interface AdminDashboardProps {
   quotes: QuoteRequest[];
   settings: CompanySettings;
   onNavigateClient: () => void;
+  onLogout: () => void;
   onRefreshData: () => void;
 }
 
@@ -37,6 +39,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   quotes,
   settings,
   onNavigateClient,
+  onLogout,
   onRefreshData,
 }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'products' | 'quotes' | 'settings'>('overview');
@@ -165,6 +168,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             >
               <span>Xem trang Khách hàng</span>
               <ExternalLink className="w-3.5 h-3.5 text-cyan-400" />
+            </button>
+            <button
+              onClick={onLogout}
+              className="px-3.5 py-1.5 text-xs font-medium text-red-300 hover:text-white bg-red-950/60 hover:bg-red-900/70 border border-red-500/30 rounded-lg transition-colors flex items-center gap-1.5"
+            >
+              <span>Đăng xuất</span>
+              <LogOut className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
