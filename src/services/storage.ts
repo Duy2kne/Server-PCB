@@ -17,7 +17,10 @@ export const StorageService = {
         return INITIAL_PRODUCTS;
       }
       const parsed: Product[] = JSON.parse(data);
-      const sanitized = parsed.filter(p => !p.title.includes('Test Jig') && (p.category as string) !== 'Tool Validation & Testing');
+      const sanitized = parsed
+        .filter(p => !p.title.includes('Test Jig') && (p.category as string) !== 'Tool Validation & Testing')
+        // Ảnh đã chuyển từ src/assets/images sang public/images (đường dẫn tương đối để chạy được trên GitHub Pages)
+        .map(p => (p.imageUrl?.startsWith('/src/assets/images/') ? { ...p, imageUrl: p.imageUrl.replace('/src/assets/images/', 'images/') } : p));
       return sanitized.length > 0 ? sanitized : INITIAL_PRODUCTS;
     } catch {
       return INITIAL_PRODUCTS;
