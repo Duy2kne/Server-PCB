@@ -103,7 +103,7 @@ export const Hero: React.FC<HeroProps> = ({ onQuoteClick, onExploreClick, onGerb
           <div className="lg:col-span-5 relative">
             <div className="relative rounded-2xl overflow-hidden border border-cyan-500/30 bg-slate-900/60 shadow-2xl shadow-cyan-950/40 group">
               <img
-                src="/src/assets/images/hero_pcb_automation_1792125856876.jpg"
+                src="images/hero_pcb_automation_1792125856876.jpg"
                 alt="DY AUTOMATION - Dây chuyền SMT và Thiết kế bo mạch kiểm thử"
                 className="w-full h-[340px] sm:h-[400px] lg:h-[420px] object-cover group-hover:scale-[1.02] transition-transform duration-500"
                 referrerPolicy="no-referrer"
