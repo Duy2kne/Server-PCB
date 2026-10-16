@@ -195,11 +195,12 @@ export const INITIAL_SETTINGS: CompanySettings = {
   brandSlogan: 'Giải Pháp Toàn Diện Từ Thiết Kế Hardware, Sản Xuất PCB Đến Phần Mềm Tự Động Hóa SCADA/IoT',
   hotline: '0984.024.042',
   technicalSupport: '0984.024.042 (Kỹ sư trưởng R&D)',
-  email: 'vohoangduy1975@gmail.com',
+  email: 'pt697220@gmail.com',
   addressHanoi: 'TBU',
   addressHcm: 'Số 247 Hiền Vương, Phường Phú Thạnh, TP. Hồ Chí Minh',
   workingHours: 'Thứ 2 - Thứ 7: 08:00 - 18:00 (Hỗ trợ khẩn cấp 24/7)',
   zaloUrl: 'https://zalo.me/0984024042',
   techStandards: 'IPC-A-610 Class 2 & 3 · ISO 9001:2015 · RoHS Compliant',
-  taxCode: '0109988776'
+  taxCode: '0109988776',
+  heroImageUrl: 'images/hero_pcb_automation_1792125856876.jpg'
 };
