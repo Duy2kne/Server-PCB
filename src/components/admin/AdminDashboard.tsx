@@ -18,12 +18,21 @@ import {
   Building,
   Check,
   AlertCircle,
-  LogOut
+  LogOut,
+  Images,
+  Loader2,
+  CloudOff
 } from 'lucide-react';
 import { Product, QuoteRequest, CompanySettings, QuoteStatus } from '../../types';
 import { StorageService } from '../../services/storage';
 import { ProductFormModal } from './ProductFormModal';
 import { QuoteDetailModal } from './QuoteDetailModal';
+import { MediaLibrary, ImageField } from './MediaLibrary';
+import { GitHubConnectPanel } from './GitHubConnectPanel';
+import { GitHubService } from '../../services/github';
+import { adminImageUrl, publishProducts, publishSettings } from '../../services/content';
+
+type PublishToast = { kind: 'saving' | 'ok' | 'warn' | 'error'; text: string } | null;
 
 interface AdminDashboardProps {
   products: Product[];
@@ -42,7 +51,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onLogout,
   onRefreshData,
 }) => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'products' | 'quotes' | 'settings'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'products' | 'quotes' | 'media' | 'settings'>('overview');
+  const [githubConnected, setGithubConnected] = useState(GitHubService.isConnected());
+  const [toast, setToast] = useState<PublishToast>(null);
   
   // Product state
   const [productSearch, setProductSearch] = useState('');
@@ -86,6 +97,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return matchStatus && matchSearch;
   });
 
+  /** Lưu thay đổi lên GitHub để khách thấy (bản trên máy đã được lưu trước đó) */
+  const publish = async (task: () => Promise<void>) => {
+    if (!GitHubService.isConnected()) {
+      setToast({ kind: 'warn', text: 'Đã lưu trên máy này. Chưa kết nối GitHub nên khách chưa thấy — vào tab "Thư viện ảnh" để kết nối.' });
+      return;
+    }
+    setToast({ kind: 'saving', text: 'Đang lưu lên GitHub...' });
+    try {
+      await task();
+      setToast({ kind: 'ok', text: 'Đã lưu lên GitHub. Web của khách cập nhật sau khoảng 1–2 phút.' });
+      setTimeout(() => setToast(t => (t?.kind === 'ok' ? null : t)), 6000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setToast({ kind: 'error', text: `Lưu lên GitHub thất bại: ${msg} Thay đổi mới chỉ nằm trên máy này — hãy bấm Lưu lại.` });
+    }
+  };
+
   // Handlers for Products
   const handleOpenAddProduct = () => {
     setEditingProduct(null);
@@ -105,12 +133,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
     setIsProductModalOpen(false);
     onRefreshData();
+    publish(() => publishProducts(`${editingProduct ? 'Sửa' : 'Thêm'} sản phẩm: ${productData.title}`));
   };
 
   const handleDeleteProduct = (id: string, title: string) => {
     if (confirm(`Bạn có chắc chắn muốn xóa sản phẩm "${title}"?`)) {
       StorageService.deleteProduct(id);
       onRefreshData();
+      publish(() => publishProducts(`Xóa sản phẩm: ${title}`));
     }
   };
 
@@ -132,15 +162,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setSettingsSaveSuccess(true);
     setTimeout(() => setSettingsSaveSuccess(false), 2500);
     onRefreshData();
+    publish(() => publishSettings('Cập nhật cấu hình doanh nghiệp'));
   };
 
   const handleResetDefaults = () => {
-    if (confirm('Khôi phục toàn bộ danh sách sản phẩm, báo giá và cấu hình về dữ liệu mẫu ban đầu?')) {
+    const online = GitHubService.isConnected() ? '\n\n⚠ Đang kết nối GitHub: bản mẫu sẽ GHI ĐÈ nội dung trên web của khách.' : '';
+    if (confirm(`Khôi phục toàn bộ danh sách sản phẩm, báo giá và cấu hình về dữ liệu mẫu ban đầu?${online}`)) {
       StorageService.resetAllDefaults();
       setResetSuccess(true);
       setTimeout(() => setResetSuccess(false), 2500);
       onRefreshData();
       setSettingsForm(StorageService.getSettings());
+      publish(async () => {
+        await publishProducts('Khôi phục sản phẩm mẫu');
+        await publishSettings('Khôi phục cấu hình mẫu');
+      });
     }
   };
 
@@ -229,6 +265,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </button>
 
           <button
+            onClick={() => setActiveTab('media')}
+            className={`px-4 py-2 text-xs font-semibold rounded-lg flex items-center gap-2 transition-all whitespace-nowrap ${
+              activeTab === 'media'
+                ? 'bg-cyan-500 text-slate-950 shadow-md'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+            }`}
+          >
+            <Images className="w-4 h-4" />
+            <span>Thư Viện Ảnh</span>
+            {!githubConnected && <CloudOff className="w-3.5 h-3.5 text-amber-400" />}
+          </button>
+
+          <button
             onClick={() => setActiveTab('settings')}
             className={`px-4 py-2 text-xs font-semibold rounded-lg flex items-center gap-2 transition-all whitespace-nowrap ${
               activeTab === 'settings'
@@ -240,6 +289,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <span>Cấu Hình Doanh Nghiệp</span>
           </button>
         </div>
+
+        {!githubConnected && activeTab !== 'media' && (
+          <div className="mb-6 p-3.5 rounded-lg bg-amber-950/50 border border-amber-500/40 text-amber-200 text-xs flex items-center gap-2">
+            <CloudOff className="w-4 h-4 shrink-0" />
+            <span>
+              Chưa kết nối GitHub: mọi thay đổi chỉ lưu trên trình duyệt này, khách vào web sẽ không thấy.{' '}
+              <button type="button" onClick={() => setActiveTab('media')} className="underline font-semibold hover:text-white">Kết nối ngay</button>
+            </span>
+          </div>
+        )}
 
         {/* TAB 1: OVERVIEW */}
         {activeTab === 'overview' && (
@@ -461,7 +520,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-3">
                             <img
-                              src={p.imageUrl}
+                              src={adminImageUrl(p.imageUrl)}
                               alt={p.title}
                               className="w-12 h-9 object-cover rounded-md border border-slate-800 bg-slate-950 shrink-0"
                             />
@@ -620,6 +679,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         )}
 
+        {/* TAB: MEDIA LIBRARY */}
+        {activeTab === 'media' && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            <GitHubConnectPanel
+              onChange={() => setGithubConnected(GitHubService.isConnected())}
+              onPublishAll={async () => {
+                await publishProducts('Xuất bản toàn bộ sản phẩm');
+                await publishSettings('Xuất bản cấu hình doanh nghiệp');
+              }}
+            />
+            <div className="p-5 rounded-2xl bg-slate-900/50 border border-slate-800 space-y-4">
+              <div>
+                <h3 className="text-sm font-bold text-white">Thư viện ảnh</h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Tải ảnh lên để dùng cho sản phẩm, bài viết và banner trang chủ. Bấm vào ảnh để sao chép đường dẫn.
+                </p>
+              </div>
+              <MediaLibrary key={String(githubConnected)} products={products} extraUsedUrls={settings.heroImageUrl ? [settings.heroImageUrl] : []} />
+            </div>
+          </div>
+        )}
+
         {/* TAB 4: GENERAL CONFIGURATION (CẤU HÌNH DOANH NGHIỆP) */}
         {activeTab === 'settings' && (
           <div className="max-w-3xl space-y-8 animate-in fade-in duration-200">
@@ -730,6 +811,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   />
                 </div>
 
+                <ImageField
+                  label="Ảnh banner trang chủ"
+                  value={settingsForm.heroImageUrl || ''}
+                  onChange={url => setSettingsForm({ ...settingsForm, heroImageUrl: url })}
+                  products={products}
+                />
+
                 <div>
                   <label className="block font-medium text-slate-300 mb-1">Chứng chỉ & Tiêu chuẩn chất lượng</label>
                   <input
@@ -772,6 +860,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           product={editingProduct}
           onClose={() => setIsProductModalOpen(false)}
           onSave={handleSaveProduct}
+          products={products}
         />
       )}
 
@@ -783,6 +872,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           onUpdateStatus={handleUpdateQuoteStatus}
           onDelete={handleDeleteQuote}
         />
+      )}
+
+      {/* Trạng thái lưu lên GitHub */}
+      {toast && (
+        <div
+          className={`fixed bottom-6 right-6 z-[70] max-w-sm p-3.5 rounded-xl border shadow-2xl text-xs flex items-start gap-2 ${
+            toast.kind === 'ok'
+              ? 'bg-emerald-950/95 border-emerald-500/50 text-emerald-200'
+              : toast.kind === 'error'
+                ? 'bg-red-950/95 border-red-500/50 text-red-200'
+                : toast.kind === 'warn'
+                  ? 'bg-amber-950/95 border-amber-500/50 text-amber-200'
+                  : 'bg-slate-900/95 border-cyan-500/40 text-cyan-200'
+          }`}
+        >
+          {toast.kind === 'saving' ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : toast.kind === 'ok' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+          <span className="flex-1">{toast.text}</span>
+          {toast.kind !== 'saving' && (
+            <button type="button" onClick={() => setToast(null)} className="opacity-70 hover:opacity-100">✕</button>
+          )}
+        </div>
       )}
 
     </div>
