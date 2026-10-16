@@ -5,6 +5,8 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    // Đường dẫn tương đối: chạy được cả ở gốc domain lẫn thư mục con (GitHub Pages: /Server-PCB/)
+    base: './',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
