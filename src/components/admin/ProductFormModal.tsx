@@ -1,17 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Trash2, Image, Cpu, Check, AlertCircle } from 'lucide-react';
+import { X, Plus, Trash2, Cpu, Check, AlertCircle } from 'lucide-react';
 import { Product, ProductCategory, ProductSpec } from '../../types';
+import { BUILTIN_IMAGES } from '../../services/content';
+import { ImageField } from './MediaLibrary';
 
 interface ProductFormModalProps {
   product: Product | null; // null means adding a new product
   onClose: () => void;
   onSave: (productData: Omit<Product, 'id' | 'updatedAt'>) => void;
+  /** Danh sách sản phẩm (để thư viện ảnh biết ảnh nào đang dùng) */
+  products?: Product[];
 }
 
 export const ProductFormModal: React.FC<ProductFormModalProps> = ({
   product,
   onClose,
   onSave,
+  products,
 }) => {
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState<ProductCategory>('Thiết kế PCB');
@@ -19,7 +24,7 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
   const [priceEstimate, setPriceEstimate] = useState('Liên hệ báo giá kỹ thuật');
   const [shortDesc, setShortDesc] = useState('');
   const [fullDesc, setFullDesc] = useState('');
-  const [imageUrl, setImageUrl] = useState('images/chiller_esp32_board_1792125857487.jpg');
+  const [imageUrl, setImageUrl] = useState(BUILTIN_IMAGES[0].url);
   const [specs, setSpecs] = useState<ProductSpec[]>([
     { key: 'Vi điều khiển / CPU', value: '32-bit MCU' },
     { key: 'Điện áp cấp', value: '12V - 24V DC' },
@@ -29,15 +34,6 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
     'Bảo vệ quá áp và ngắn mạch ngõ ra'
   ]);
   const [error, setError] = useState('');
-
-  // Sample preset images generated for DY AUTOMATION
-  const presetImages = [
-    { label: 'Chiller Mini ESP32', url: 'images/chiller_esp32_board_1792125857487.jpg' },
-    { label: 'Boiler Nồi hơi 2 que dò', url: 'images/boiler_controller_pcb_1792125859286.jpg' },
-    { label: 'IoT Gateway RS485 Modbus', url: 'images/automation_software_pcb_1792125859834.jpg' },
-    { label: 'Automation Web/PC System', url: 'images/automation_software_pcb_1792125859834.jpg' },
-    { label: 'SMT Line & PCB Layout', url: 'images/hero_pcb_automation_1792125856876.jpg' },
-  ];
 
   useEffect(() => {
     if (product) {
@@ -99,7 +95,7 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
       priceEstimate: priceEstimate.trim() || 'Liên hệ báo giá',
       shortDesc: shortDesc.trim(),
       fullDesc: fullDesc.trim() || shortDesc.trim(),
-      imageUrl: imageUrl.trim() || presetImages[0].url,
+      imageUrl: imageUrl.trim() || BUILTIN_IMAGES[0].url,
       specs: cleanedSpecs,
       features: cleanedFeatures,
     });
@@ -202,43 +198,7 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
           </div>
 
           {/* Image Selection & Preview */}
-          <div className="space-y-2">
-            <label className="block font-medium text-slate-300">
-              Hình ảnh sản phẩm (chọn mẫu có sẵn hoặc nhập đường dẫn URL)
-            </label>
-            <div className="flex flex-wrap gap-2 mb-2">
-              {presetImages.map((p, idx) => (
-                <button
-                  type="button"
-                  key={idx}
-                  onClick={() => setImageUrl(p.url)}
-                  className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-mono transition-colors flex items-center gap-1.5 ${
-                    imageUrl === p.url
-                      ? 'bg-cyan-950 border-cyan-400 text-cyan-300 font-semibold'
-                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  <Image className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>{p.label}</span>
-                </button>
-              ))}
-            </div>
-
-            <div className="flex gap-3 items-center">
-              <input
-                type="text"
-                value={imageUrl}
-                onChange={(e) => setImageUrl(e.target.value)}
-                placeholder="URL hình ảnh (images/... hoặc https://...)"
-                className="flex-1 px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-300 font-mono text-[11px] focus:outline-none focus:border-cyan-500"
-              />
-              {imageUrl && (
-                <div className="w-12 h-12 rounded-lg border border-slate-700 overflow-hidden bg-black shrink-0">
-                  <img src={imageUrl} alt="Preview" className="w-full h-full object-cover" />
-                </div>
-              )}
-            </div>
-          </div>
+          <ImageField label="Hình ảnh sản phẩm / bài viết" value={imageUrl} onChange={setImageUrl} products={products} />
 
           {/* Short Description */}
           <div>
