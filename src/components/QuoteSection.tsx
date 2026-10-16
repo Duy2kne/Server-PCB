@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Send, UploadCloud, FileText, CheckCircle2, AlertCircle, X, Shield, Phone, Mail, MapPin } from 'lucide-react';
 import { CompanySettings, AttachedFile, QuoteRequest } from '../types';
 import { StorageService } from '../services/storage';
+import { sendQuoteEmail } from '../services/email';
 
 export interface GerberConfigData {
   fileName: string;
@@ -128,7 +129,7 @@ export const QuoteSection: React.FC<QuoteSectionProps> = ({
     setAttachedFiles(prev => prev.filter((_, i) => i !== index));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
 
@@ -139,8 +140,9 @@ export const QuoteSection: React.FC<QuoteSectionProps> = ({
 
     setIsSubmitting(true);
 
+    let newQuote: QuoteRequest | null = null;
     try {
-      const newQuote = StorageService.addQuote({
+      newQuote = StorageService.addQuote({
         fullName: fullName.trim(),
         company: company.trim() || 'Doanh nghiệp cá nhân',
         phone: phone.trim(),
@@ -152,6 +154,9 @@ export const QuoteSection: React.FC<QuoteSectionProps> = ({
         attachedFiles,
       });
 
+      // Gửi về email chủ website; lỗi thì giữ nguyên form để khách gửi lại hoặc gọi hotline
+      await sendQuoteEmail(newQuote);
+
       setSubmittedQuote(newQuote);
       // Reset fields
       setFullName('');
@@ -162,7 +167,11 @@ export const QuoteSection: React.FC<QuoteSectionProps> = ({
       setRequirements('');
       setAttachedFiles([]);
     } catch (err) {
-      setErrorMessage('Có lỗi xảy ra khi lưu yêu cầu. Vui lòng thử lại.');
+      console.error('Gửi yêu cầu báo giá thất bại:', err);
+      if (newQuote) StorageService.deleteQuote(newQuote.id);
+      setErrorMessage(
+        `Chưa gửi được yêu cầu (lỗi kết nối hệ thống). Vui lòng thử lại, hoặc liên hệ trực tiếp hotline ${settings.hotline} / Zalo / email ${settings.email}.`
+      );
     } finally {
       setIsSubmitting(false);
     }
