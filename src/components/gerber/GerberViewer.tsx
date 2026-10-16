@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
 import {
   UploadCloud,
   Check,
@@ -14,17 +14,28 @@ import {
   ZoomOut,
   Layers,
   ArrowLeft,
-  AlertTriangle
+  AlertTriangle,
+  Box,
 } from 'lucide-react';
-import { parseGerberFile, ParsedGerberBoard } from '../../utils/gerberParser';
 import {
-  drawDynamicBoard,
-  BoardThemeColors
-} from '../../utils/realisticBoardRenderer';
+  parseGerberFiles,
+  recolorGerberBoard,
+  GerberParseError,
+  type ParsedGerberBoard,
+  type StackupColors,
+  type DetectedLayer,
+} from '../../utils/gerberParser';
+import { createDemoGerberZip } from '../../utils/gerber/sampleBoard';
+import type { CameraPreset } from './Board3DView';
+
+// three.js chỉ tải khi người dùng mở chế độ 3D
+const Board3DView = lazy(() => import('./Board3DView').then(m => ({ default: m.Board3DView })));
 
 export type SolderMaskColor = 'green' | 'purple' | 'red' | 'yellow' | 'blue' | 'white' | 'black';
 export type SurfaceFinish = 'HASL' | 'LeadFree_HASL' | 'ENIG' | 'OSP';
 export type BaseMaterial = 'FR-4' | 'Flex' | 'Aluminum' | 'Copper Core' | 'Rogers' | 'PTFE Teflon' | 'HDI';
+
+type ViewMode = 'side-by-side' | 'top' | 'bottom' | '3d';
 
 interface GerberViewerProps {
   onApplyToQuote?: (config: {
@@ -39,12 +50,55 @@ interface GerberViewerProps {
   }) => void;
 }
 
-export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) => {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+// Màu theo lớp vật liệu thật: sm = solder mask (bán trong suốt, để thấy đường đồng bên dưới),
+// cu = đồng nằm dưới mask, fr4 = nền, ss = silkscreen, edge = cạnh bo trong chế độ 3D
+const MASK_COLORS: Record<SolderMaskColor, { label: string; swatch: string; sm: string; cu: string; fr4: string; ss: string; edge: string }> = {
+  green: { label: 'Green', swatch: '#15803d', sm: 'rgba(0, 92, 36, 0.86)', cu: '#5e9e3c', fr4: '#3b4a22', ss: '#ffffff', edge: '#3d6b35' },
+  purple: { label: 'Purple', swatch: '#7e22ce', sm: 'rgba(76, 22, 122, 0.88)', cu: '#9c6cc4', fr4: '#3a2a4a', ss: '#ffffff', edge: '#4b2d66' },
+  red: { label: 'Red', swatch: '#b91c1c', sm: 'rgba(164, 22, 26, 0.88)', cu: '#dc5e50', fr4: '#4a2a1a', ss: '#ffffff', edge: '#7a2626' },
+  yellow: { label: 'Yellow', swatch: '#ca8a04', sm: 'rgba(214, 168, 18, 0.9)', cu: '#f2d266', fr4: '#6a5a2a', ss: '#ffffff', edge: '#9a7a24' },
+  blue: { label: 'Blue', swatch: '#0369a1', sm: 'rgba(12, 62, 152, 0.88)', cu: '#5288d2', fr4: '#22324a', ss: '#ffffff', edge: '#1f3f73' },
+  white: { label: 'White', swatch: '#f8fafc', sm: 'rgba(242, 242, 238, 0.93)', cu: '#ffffff', fr4: '#d8d4c4', ss: '#111111', edge: '#d9d7cf' },
+  black: { label: 'Black', swatch: '#27272a', sm: 'rgba(20, 20, 22, 0.93)', cu: '#45454a', fr4: '#1a1a1a', ss: '#ffffff', edge: '#2a2a2d' },
+};
 
-  // Active Board State - NULL by default. Canvas is ONLY displayed when a file is loaded successfully!
+const FINISHES: Record<SurfaceFinish, { label: string; cf: string }> = {
+  HASL: { label: 'HASL(with lead)', cf: '#d3d6d9' },
+  LeadFree_HASL: { label: 'LeadFree HASL', cf: '#e2e5e8' },
+  ENIG: { label: 'ENIG', cf: '#e0b54e' },
+  OSP: { label: 'OSP', cf: '#cf8f58' },
+};
+
+const LAYER_OPTIONS = [1, 2, 4, 6, 8, 10, 12, 14, 16];
+
+function stackupColorsFor(mask: SolderMaskColor, finish: SurfaceFinish): StackupColors {
+  const m = MASK_COLORS[mask];
+  return { fr4: m.fr4, cu: m.cu, cf: FINISHES[finish].cf, sm: m.sm, ss: m.ss, sp: 'rgba(0,0,0,0)', out: 'rgba(0,0,0,0)' };
+}
+
+const STATUS_STYLE: Record<DetectedLayer['status'], { dot: string; text: string; note: string }> = {
+  used: { dot: 'bg-emerald-400', text: 'text-slate-200', note: '' },
+  empty: { dot: 'bg-amber-400', text: 'text-slate-400', note: 'trống' },
+  skipped: { dot: 'bg-slate-500', text: 'text-slate-400', note: 'không hiển thị' },
+  ignored: { dot: 'bg-slate-700', text: 'text-slate-500', note: 'bỏ qua' },
+};
+
+const baseName = (path: string) => path.split('/').pop() || path;
+
+/** Tạo blob URL cho SVG và tự thu hồi khi đổi */
+function useSvgUrl(svg: string | undefined) {
+  const url = useMemo(() => (svg ? URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })) : null), [svg]);
+  useEffect(() => () => {
+    if (url) URL.revokeObjectURL(url);
+  }, [url]);
+  return url;
+}
+
+export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) => {
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+
+  // Bo đang hiển thị — null cho tới khi tải tệp thành công
   const [parsedBoard, setParsedBoard] = useState<ParsedGerberBoard | null>(null);
-  const [isLoaded, setIsLoaded] = useState<boolean>(false);
 
   // Specifications
   const [boardWidth, setBoardWidth] = useState<number>(0);
@@ -56,109 +110,21 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
   const [pcbThickness, setPcbThickness] = useState<string>('1.6mm');
   const [quantity, setQuantity] = useState<number>(5);
 
-  // View Mode: 'side-by-side' (JLCPCB Top & Bottom) or single view
-  const [viewMode, setViewMode] = useState<'side-by-side' | 'top' | 'bottom'>('side-by-side');
+  const [viewMode, setViewMode] = useState<ViewMode>('side-by-side');
+  const [cameraPreset, setCameraPreset] = useState<CameraPreset>('iso');
+  const [cameraResetKey, setCameraResetKey] = useState(0);
 
   // Parser & Error state
   const [isParsing, setIsParsing] = useState<boolean>(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
 
-  // Viewport navigation
-  const [zoom, setZoom] = useState<number>(1);
-  const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState<boolean>(false);
-  const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  // Viewport navigation (2D)
+  const [view, setView] = useState({ zoom: 1, x: 0, y: 0 });
+  const dragRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
 
-  // Color Definitions matching JLCPCB
-  const colorPalettes: Record<SolderMaskColor, {
-    bg: string;
-    substrateBase: string;
-    substrateDark: string;
-    traceColor: string;
-    silkColor: string;
-    label: string;
-  }> = {
-    green: {
-      bg: '#15803d',
-      substrateBase: '#15522b',
-      substrateDark: '#0e3a1e',
-      traceColor: '#1d6f3b',
-      silkColor: '#ffffff',
-      label: 'Green'
-    },
-    purple: {
-      bg: '#7e22ce',
-      substrateBase: '#581c87',
-      substrateDark: '#3b0764',
-      traceColor: '#6b21a8',
-      silkColor: '#ffffff',
-      label: 'Purple'
-    },
-    red: {
-      bg: '#b91c1c',
-      substrateBase: '#881337',
-      substrateDark: '#4c0519',
-      traceColor: '#9f1239',
-      silkColor: '#ffffff',
-      label: 'Red'
-    },
-    yellow: {
-      bg: '#ca8a04',
-      substrateBase: '#a16207',
-      substrateDark: '#713f12',
-      traceColor: '#ca8a04',
-      silkColor: '#000000',
-      label: 'Yellow'
-    },
-    blue: {
-      bg: '#0369a1',
-      substrateBase: '#075985',
-      substrateDark: '#0c4a6e',
-      traceColor: '#0284c7',
-      silkColor: '#ffffff',
-      label: 'Blue'
-    },
-    white: {
-      bg: '#f8fafc',
-      substrateBase: '#e2e8f0',
-      substrateDark: '#cbd5e1',
-      traceColor: '#f1f5f9',
-      silkColor: '#0f172a',
-      label: 'White'
-    },
-    black: {
-      bg: '#27272a',
-      substrateBase: '#18181b',
-      substrateDark: '#09090b',
-      traceColor: '#27272a',
-      silkColor: '#f4f4f5',
-      label: 'Black'
-    }
-  };
-
-  const finishPads: Record<SurfaceFinish, { padFill: string; padStroke: string; label: string }> = {
-    HASL: {
-      padFill: '#d4d4d8',
-      padStroke: '#a1a1aa',
-      label: 'HASL(with lead)'
-    },
-    LeadFree_HASL: {
-      padFill: '#e2e8f0',
-      padStroke: '#cbd5e1',
-      label: 'LeadFree HASL'
-    },
-    ENIG: {
-      padFill: '#fbbf24',
-      padStroke: '#d97706',
-      label: 'ENIG'
-    },
-    OSP: {
-      padFill: '#d97706',
-      padStroke: '#b45309',
-      label: 'OSP'
-    }
-  };
+  const topUrl = useSvgUrl(parsedBoard?.render.stackup.top.svg);
+  const bottomUrl = useSvgUrl(parsedBoard?.render.stackup.bottom.svg);
 
   // Pricing calculation
   const calculateCost = () => {
@@ -184,161 +150,111 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
 
   const pricing = calculateCost();
 
-  // Gerber file upload handler (processes .rar, .zip, .gtl, etc.)
-  const handleFileUpload = async (file: File) => {
+  const resetView = () => {
+    setView({ zoom: 1, x: 0, y: 0 });
+    setCameraResetKey(k => k + 1);
+  };
+
+  // Tăng mỗi khi đổi màu hoặc đổi bo, để kết quả đổi màu cũ không ghi đè bo mới
+  const recolorSeq = useRef(0);
+
+  // Tải 1 tệp nén (.zip/.rar) hoặc nhiều tệp lớp Gerber/Excellon rời
+  const handleFileUpload = async (files: File[]) => {
+    if (files.length === 0) return;
+    recolorSeq.current++;
     setIsParsing(true);
     setValidationError(null);
 
     try {
-      const result: ParsedGerberBoard = await parseGerberFile(file);
-
-      if (!result.isValid) {
-        setValidationError(
-          result.errorMessage ||
-          `Tệp "${file.name}" không phải là tệp Gerber hợp lệ. Vui lòng tải lên tệp nén CAM (.zip hoặc .rar) xuất từ Altium Designer, KiCad, EasyEDA hoặc Eagle.`
-        );
-        setIsParsing(false);
-        return;
-      }
-
+      const result = await parseGerberFiles(files, stackupColorsFor(selectedColor, selectedFinish));
       setParsedBoard(result);
-      setBoardWidth(result.widthMm);
-      setBoardHeight(result.heightMm);
-      setLayersCount(result.layersDetected.some(l => l.type === 'copper_bottom') ? 2 : 1);
-      setIsLoaded(true);
-      setZoom(1);
-      setPanOffset({ x: 0, y: 0 });
-    } catch (err: any) {
-      setValidationError(`Lỗi khi đọc tệp Gerber: ${err?.message || 'Tệp không tương thích hoặc bị lỗi'}.`);
+      setBoardWidth(parseFloat(result.widthMm.toFixed(2)));
+      setBoardHeight(parseFloat(result.heightMm.toFixed(2)));
+      setLayersCount(LAYER_OPTIONS.find(n => n >= result.copperLayerCount) ?? 2);
+      resetView();
+    } catch (err) {
+      setValidationError(
+        err instanceof GerberParseError
+          ? err.message
+          : `Lỗi khi đọc tệp Gerber: ${(err as Error)?.message || 'Tệp không tương thích hoặc bị lỗi'}.`
+      );
     } finally {
       setIsParsing(false);
     }
   };
 
+  const handleLoadDemoBoard = async () => {
+    setIsParsing(true);
+    setValidationError(null);
+    try {
+      const demoZip = await createDemoGerberZip();
+      await handleFileUpload([demoZip]);
+    } catch (err) {
+      setValidationError(err instanceof Error ? err.message : 'Không tạo được bo mạch mẫu.');
+      setIsParsing(false);
+    }
+  };
+
+  // Đổi màu mask / lớp mạ: render lại từ dữ liệu đã parse (không đọc lại tệp)
+  const boardRef = useRef(parsedBoard);
+  boardRef.current = parsedBoard;
+  useEffect(() => {
+    const board = boardRef.current;
+    if (!board) return;
+    const seq = ++recolorSeq.current;
+    recolorGerberBoard(board, stackupColorsFor(selectedColor, selectedFinish))
+      .then(next => seq === recolorSeq.current && setParsedBoard(next))
+      .catch(() => undefined);
+  }, [selectedColor, selectedFinish]);
+
   const handleResetToUpload = () => {
-    setIsLoaded(false);
+    recolorSeq.current++;
     setParsedBoard(null);
     setValidationError(null);
-    setZoom(1);
-    setPanOffset({ x: 0, y: 0 });
+    resetView();
   };
 
-  // Canvas Main Render Loop: Only executed when isLoaded && parsedBoard
+  // Zoom bằng con lăn chuột quanh vị trí con trỏ (cần listener non-passive để chặn cuộn trang)
   useEffect(() => {
-    if (!isLoaded || !parsedBoard) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const cw = canvas.width;
-    const ch = canvas.height;
-
-    // JLCPCB crisp neutral light-gray canvas backdrop
-    ctx.clearRect(0, 0, cw, ch);
-    ctx.fillStyle = '#f1f5f9';
-    ctx.fillRect(0, 0, cw, ch);
-
-    ctx.save();
-    const centerX = cw / 2 + panOffset.x;
-    const centerY = ch / 2 + panOffset.y;
-    ctx.translate(centerX, centerY);
-    ctx.scale(zoom, zoom);
-
-    // Board Scale: dynamic scale so board fills the viewport comfortably like JLCPCB
-    const bw = boardWidth || parsedBoard.widthMm || 40;
-    const bh = boardHeight || parsedBoard.heightMm || 20;
-    const targetBoardW = viewMode === 'side-by-side' ? 380 : 540;
-    const mmToPx = Math.min(10.0, Math.max(2.5, targetBoardW / Math.max(bw, bh)));
-    const pw = bw * mmToPx;
-    const ph = bh * mmToPx;
-
-    const colorScheme = colorPalettes[selectedColor];
-    const finish = finishPads[selectedFinish];
-
-    const themeColors: BoardThemeColors = {
-      substrateBase: colorScheme.substrateBase,
-      substrateDark: colorScheme.substrateDark,
-      traceColor: colorScheme.traceColor,
-      padFill: finish.padFill,
-      padStroke: finish.padStroke,
-      drillHole: '#1e293b',
-      silkColor: colorScheme.silkColor,
+    const el = viewportRef.current;
+    if (!el || viewMode === '3d') return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const px = e.clientX - rect.left - rect.width / 2;
+      const py = e.clientY - rect.top - rect.height / 2;
+      setView(v => {
+        const zoom = Math.min(20, Math.max(0.5, v.zoom * Math.exp(-e.deltaY * 0.0015)));
+        const k = zoom / v.zoom;
+        return { zoom, x: px - (px - v.x) * k, y: py - (py - v.y) * k };
+      });
     };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [viewMode, parsedBoard !== null]);
 
-    if (viewMode === 'side-by-side') {
-      const gap = 48;
-      const leftBx = -pw - gap / 2;
-      const rightBx = gap / 2;
-      const by = -ph / 2;
-
-      // Draw Top & Bottom Side
-      drawDynamicBoard(ctx, parsedBoard, leftBx, by, pw, ph, 'top', themeColors);
-      drawDynamicBoard(ctx, parsedBoard, rightBx, by, pw, ph, 'bottom', themeColors);
-
-      // Labels below boards
-      ctx.fillStyle = '#475569';
-      ctx.font = 'bold 11px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText('TOP LAYER (Mặt Trên)', leftBx + pw / 2, by + ph + 20);
-      ctx.fillText('BOTTOM LAYER (Mặt Dưới)', rightBx + pw / 2, by + ph + 20);
-
-    } else {
-      const bx = -pw / 2;
-      const by = -ph / 2;
-
-      drawDynamicBoard(ctx, parsedBoard, bx, by, pw, ph, viewMode, themeColors);
-
-      // Dimension rulers
-      ctx.strokeStyle = '#0284c7';
-      ctx.fillStyle = '#0284c7';
-      ctx.lineWidth = 1.2;
-      ctx.font = 'bold 11px monospace';
-      const dimY = by - 16;
-
-      ctx.beginPath();
-      ctx.moveTo(bx, dimY);
-      ctx.lineTo(bx + pw, dimY);
-      ctx.moveTo(bx, dimY - 4);
-      ctx.lineTo(bx, dimY + 4);
-      ctx.moveTo(bx + pw, dimY - 4);
-      ctx.lineTo(bx + pw, dimY + 4);
-      ctx.stroke();
-
-      ctx.textAlign = 'center';
-      ctx.fillText(`${(boardWidth || parsedBoard.widthMm).toFixed(2)} mm`, 0, dimY - 6);
-    }
-
-    ctx.restore();
-  }, [
-    isLoaded,
-    parsedBoard,
-    viewMode,
-    selectedColor,
-    selectedFinish,
-    boardWidth,
-    boardHeight,
-    zoom,
-    panOffset,
-  ]);
-
-  // Mouse pan handlers
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    setIsDragging(true);
-    setDragStart({ x: e.clientX - panOffset.x, y: e.clientY - panOffset.y });
-  };
-
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDragging) return;
-    setPanOffset({
-      x: e.clientX - dragStart.x,
-      y: e.clientY - dragStart.y,
+  const zoomBy = useCallback((factor: number) => {
+    setView(v => {
+      const zoom = Math.min(20, Math.max(0.5, v.zoom * factor));
+      const k = zoom / v.zoom;
+      return { zoom, x: v.x * k, y: v.y * k };
     });
+  }, []);
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (viewMode === '3d') return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = { x: e.clientX, y: e.clientY, panX: view.x, panY: view.y };
   };
 
-  const handleMouseUp = () => {
-    setIsDragging(false);
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) return;
+    setView(v => ({ ...v, x: d.panX + e.clientX - d.x, y: d.panY + e.clientY - d.y }));
+  };
+
+  const handlePointerUp = () => {
+    dragRef.current = null;
   };
 
   const handleApplyConfig = () => {
@@ -356,10 +272,35 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
     }
   };
 
+  const usedLayers = parsedBoard?.layers.filter(l => l.status !== 'ignored') ?? [];
+  const ignoredCount = (parsedBoard?.layers.length ?? 0) - usedLayers.length;
+  const hasDrill = parsedBoard?.layers.some(l => l.type === 'drill' && l.status === 'used') ?? false;
+  const realW = parsedBoard?.widthMm ?? 0;
+  const realH = parsedBoard?.heightMm ?? 0;
+
+  const boardImage = (url: string | null, label: string) => (
+    <figure className="flex flex-col items-center gap-2 min-w-0 min-h-0 h-full flex-1">
+      {/* Ảnh SVG có kích thước gốc theo mm/inch rất nhỏ — cho giãn hết khung, giữ tỉ lệ bằng object-contain */}
+      <div className="relative w-full flex-1 min-h-0">
+        {url && (
+          <img
+            src={url}
+            alt={label}
+            draggable={false}
+            className="absolute inset-0 w-full h-full object-contain drop-shadow-[0_6px_14px_rgba(15,23,42,0.35)] select-none"
+          />
+        )}
+      </div>
+      <figcaption className="text-[11px] font-bold font-mono text-slate-600 whitespace-nowrap">
+        {label} · {realW.toFixed(2)} × {realH.toFixed(2)} mm
+      </figcaption>
+    </figure>
+  );
+
   return (
     <section id="gerber-viewer" className="py-16 lg:py-24 bg-slate-950 relative border-t border-slate-900">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        
+
         {/* Top Product Tabs */}
         <div className="mb-6 flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
           <div className="px-5 py-2.5 rounded-xl bg-cyan-950/80 border border-cyan-500/60 text-cyan-300 font-bold text-xs flex items-center gap-2 whitespace-nowrap shadow-md">
@@ -388,12 +329,11 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
               Kiểm Tra File Gerber Thực Tế & Mô Phỏng Sau Gia Công
             </h2>
             <p className="mt-2 text-sm text-slate-300 max-w-3xl">
-              Hệ thống tự động phân tích tệp nén Gerber (.zip / .rar), trích xuất chính xác kích thước bo, đường mạch (tracks), chân linh kiện (pads), lỗ via và chữ in silkscreen tương tự JLCPCB.
+              Hệ thống giải nén tệp Gerber (.zip / .rar), đọc trực tiếp các lớp RS-274X và Excellon để dựng ảnh 2D mặt trên / mặt dưới và mô hình 3D đúng với dữ liệu thiết kế: đường mạch, pad, vùng đổ đồng, lỗ khoan, silkscreen và hình dạng bo.
             </p>
           </div>
 
-          {/* If board is loaded, provide button to upload another file */}
-          {isLoaded && (
+          {parsedBoard && (
             <div className="shrink-0 flex items-center gap-3">
               <button
                 onClick={handleResetToUpload}
@@ -406,7 +346,7 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
           )}
         </div>
 
-        {/* VALIDATION ERROR ALERT (When file is not a valid Gerber) */}
+        {/* VALIDATION ERROR ALERT */}
         {validationError && (
           <div className="mb-8 p-5 rounded-2xl bg-red-950/80 border border-red-500/80 text-xs text-red-200 shadow-xl flex items-start gap-4 animate-in fade-in">
             <div className="p-2.5 rounded-xl bg-red-900/60 text-red-300 shrink-0">
@@ -415,13 +355,13 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
             <div className="space-y-2 flex-1">
               <div className="font-bold text-red-100 text-sm flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 text-red-400" />
-                <span>CẢNH BÁO: TỆP TẢI LÊN KHÔNG PHẢI LÀ GERBER HỢP LỆ!</span>
+                <span>KHÔNG ĐỌC ĐƯỢC TỆP GERBER</span>
               </div>
               <p className="leading-relaxed text-red-200">
                 {validationError}
               </p>
               <div className="pt-2 text-[11px] text-red-300/90 font-mono bg-red-950/40 p-3 rounded-lg border border-red-900/50">
-                💡 <strong>Yêu cầu tệp Gerber:</strong> Tệp nén .zip hoặc .rar cần chứa các lớp bo mạch CAM như: Top Copper (.GTL), Bottom Copper (.GBL), Solder Mask (.GTS/.GBS), Silkscreen (.GTO/.GBO), Board Outline (.GKO/.GML), và tệp khoan lỗ (.DRL/.TXT).
+                💡 <strong>Yêu cầu tệp Gerber:</strong> Tệp nén .zip hoặc .rar cần chứa các lớp bo mạch CAM như: Top Copper (.GTL), Bottom Copper (.GBL), Solder Mask (.GTS/.GBS), Silkscreen (.GTO/.GBO), Board Outline (.GKO/.GM1/Edge_Cuts), và tệp khoan lỗ (.DRL/.TXT).
               </div>
             </div>
             <button
@@ -434,7 +374,7 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
         )}
 
         {/* 1. STATE: NO GERBER LOADED YET -> SHOW DEDICATED UPLOAD DROPZONE */}
-        {!isLoaded || !parsedBoard ? (
+        {!parsedBoard ? (
           <div className="bg-slate-900/70 border border-slate-800 rounded-3xl p-8 sm:p-12 text-center shadow-2xl relative overflow-hidden">
             <div className="absolute inset-0 bg-gradient-to-b from-cyan-950/10 to-transparent pointer-events-none" />
 
@@ -447,9 +387,7 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
               onDrop={(e) => {
                 e.preventDefault();
                 setIsDragOver(false);
-                if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-                  handleFileUpload(e.dataTransfer.files[0]);
-                }
+                if (!isParsing) handleFileUpload(Array.from(e.dataTransfer.files));
               }}
               className={`max-w-2xl mx-auto border-2 border-dashed rounded-2xl p-10 sm:p-14 transition-all duration-200 ${
                 isDragOver
@@ -469,32 +407,45 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
                 {isParsing ? 'Đang Giải Nén & Phân Tích Tệp Gerber...' : 'Tải Lên Tệp Nén Gerber (.zip / .rar)'}
               </h3>
               <p className="text-sm text-slate-300 mb-6 max-w-md mx-auto">
-                Kéo thả tệp nén Gerber hoặc tệp lớp bo mạch vào đây để xem trước mô phỏng 2D thực tế, đổi màu sơn phủ và kiểm tra kích thước bo.
+                Kéo thả tệp nén Gerber, hoặc chọn cùng lúc nhiều tệp lớp rời (.GTL, .GBL, .DRL, ...), để xem 2D / 3D đúng thực tế, đổi màu sơn phủ và kiểm tra kích thước bo.
               </p>
 
-              <label className="inline-flex items-center gap-2.5 px-6 py-3.5 text-xs font-bold text-slate-950 bg-gradient-to-r from-cyan-400 to-cyan-300 hover:from-cyan-300 hover:to-cyan-200 rounded-xl shadow-lg shadow-cyan-500/25 cursor-pointer transition-all uppercase tracking-wider font-mono">
-                <FileCode className="w-4 h-4" />
-                <span>{isParsing ? 'Đang xử lý...' : 'Chọn Tệp Từ Máy Tính'}</span>
-                <input
-                  type="file"
-                  className="hidden"
+              <div className="flex flex-wrap items-center justify-center gap-3">
+                <label className="inline-flex items-center gap-2.5 px-6 py-3.5 text-xs font-bold text-slate-950 bg-gradient-to-r from-cyan-400 to-cyan-300 hover:from-cyan-300 hover:to-cyan-200 rounded-xl shadow-lg shadow-cyan-500/25 cursor-pointer transition-all uppercase tracking-wider font-mono">
+                  <FileCode className="w-4 h-4" />
+                  <span>{isParsing ? 'Đang xử lý...' : 'Chọn Tệp Từ Máy Tính'}</span>
+                  <input
+                    type="file"
+                    multiple
+                    className="hidden"
+                    disabled={isParsing}
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files ?? []);
+                      e.target.value = '';
+                      handleFileUpload(files);
+                    }}
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={handleLoadDemoBoard}
                   disabled={isParsing}
-                  onChange={(e) => {
-                    if (e.target.files && e.target.files[0]) {
-                      handleFileUpload(e.target.files[0]);
-                    }
-                  }}
-                />
-              </label>
+                  className="inline-flex items-center gap-2 px-5 py-3.5 text-xs font-bold text-cyan-300 bg-cyan-950/60 hover:bg-cyan-900/60 border border-cyan-500/40 hover:border-cyan-400 rounded-xl shadow-lg shadow-cyan-950/50 cursor-pointer transition-all uppercase tracking-wider font-mono"
+                >
+                  <Sparkles className="w-4 h-4 text-cyan-400" />
+                  <span>{isParsing ? 'Đang nạp...' : 'Xem Thử Bo Mạch Mẫu'}</span>
+                </button>
+              </div>
 
               {/* Supported formats */}
               <div className="mt-8 pt-6 border-t border-slate-800 text-xs text-slate-400 flex flex-wrap items-center justify-center gap-3 font-mono">
                 <span className="text-slate-500">Định dạng hỗ trợ:</span>
                 <span className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-cyan-300">.ZIP</span>
                 <span className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-cyan-300">.RAR</span>
-                <span className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-slate-300">.GTL / .GBL</span>
+                <span className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-slate-300">.GTL / .GBL / .GBR</span>
                 <span className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-slate-300">.DRL / .TXT</span>
-                <span className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-slate-300">Altium / KiCad CAM</span>
+                <span className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-slate-300">Altium / KiCad / EasyEDA / Eagle</span>
               </div>
             </div>
 
@@ -505,7 +456,7 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
                   <Check className="w-4 h-4 text-emerald-400" />
                   <span>Kích Thước Chuẩn Xác</span>
                 </div>
-                <p className="text-slate-400">Tự động đo chiều dài × chiều rộng (mm/inch) từ đường bao viền mạch (Board Outline / GKO).</p>
+                <p className="text-slate-400">Đo chiều dài × chiều rộng từ đường bao viền mạch thật (Board Outline / GKO / Edge_Cuts), giữ nguyên bo góc và khe cắt.</p>
               </div>
 
               <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 text-xs">
@@ -513,15 +464,15 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
                   <Check className="w-4 h-4 text-emerald-400" />
                   <span>Tracks, Vias & Pads</span>
                 </div>
-                <p className="text-slate-400">Hiển thị chân pad IC, linh kiện dán SMD, lỗ khoan xuyên mạch (vias) và đường dẫn đồng thực tế.</p>
+                <p className="text-slate-400">Hiển thị đúng pad, vùng đổ đồng, đường mạch, lỗ khoan / lỗ oval và silkscreen từ dữ liệu RS-274X / Excellon.</p>
               </div>
 
               <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 text-xs">
                 <div className="font-bold text-cyan-300 mb-1 font-mono flex items-center gap-1.5">
                   <Check className="w-4 h-4 text-emerald-400" />
-                  <span>Mô Phỏng 7 Màu Sơn</span>
+                  <span>Xem 3D & 7 Màu Sơn</span>
                 </div>
-                <p className="text-slate-400">Trải nghiệm đổi màu sơn phủ hàn và mạ tiếp điểm HASL/ENIG trực quan trước khi gia công.</p>
+                <p className="text-slate-400">Xoay mô hình 3D theo độ dày bo, đổi màu sơn phủ và lớp mạ HASL/ENIG/OSP trước khi gia công.</p>
               </div>
             </div>
 
@@ -529,7 +480,7 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
         ) : (
           /* 2. STATE: GERBER LOADED SUCCESSFULLY -> DISPLAY WORKSPACE & SPECIFICATIONS */
           <div className="space-y-8 animate-in fade-in">
-            
+
             {/* Success Status Banner */}
             <div className="p-4 rounded-2xl bg-slate-900/90 border border-cyan-500/40 flex flex-wrap items-center justify-between gap-4 text-xs font-mono shadow-xl">
               <div className="flex items-center gap-3">
@@ -541,7 +492,7 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
                     {parsedBoard.fileName} <span className="text-slate-400 text-xs">({parsedBoard.fileSizeFormatted})</span>
                   </div>
                   <div className="text-cyan-300 text-[11px]">
-                    Đã nhận diện: {layersCount} Lớp · Kích thước: {boardWidth.toFixed(2)} × {boardHeight.toFixed(2)} mm ({(boardWidth / 25.4).toFixed(3)} × {(boardHeight / 25.4).toFixed(3)} inches)
+                    Đã nhận diện: {parsedBoard.copperLayerCount} lớp đồng · Kích thước: {realW.toFixed(2)} × {realH.toFixed(2)} mm ({(realW / 25.4).toFixed(3)} × {(realH / 25.4).toFixed(3)} inches)
                   </div>
                 </div>
               </div>
@@ -557,30 +508,37 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
               </div>
             </div>
 
+            {(!parsedBoard.outlineFile || !hasDrill) && (
+              <div className="p-3 rounded-xl bg-amber-950/60 border border-amber-500/50 text-[11px] text-amber-200 font-mono flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>
+                  {!parsedBoard.outlineFile && 'Không tìm thấy đường bao bo (outline) khép kín — hình dạng bo đang lấy theo khung bao chữ nhật của các lớp. '}
+                  {!hasDrill && 'Không có tệp khoan (.DRL / .TXT) — ảnh sẽ không có lỗ khoan; hãy xuất thêm NC Drill khi gửi gia công.'}
+                </span>
+              </div>
+            )}
+
             {/* MAIN VISUALIZER WORKSPACE */}
             <div className="bg-slate-900/70 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
-              
+
               {/* Top Bar of Canvas */}
               <div className="p-4 bg-slate-950/90 border-b border-slate-800 flex flex-wrap items-center justify-between gap-4 text-xs">
-                <div className="flex items-center gap-2 font-mono">
-                  <span className="font-bold text-white uppercase tracking-wider">
+                <div className="flex items-center gap-2 font-mono min-w-0">
+                  <span className="font-bold text-white uppercase tracking-wider truncate">
                     Online PCB Preview: <span className="text-cyan-400">{parsedBoard.fileName}</span>
                   </span>
                 </div>
 
-                {/* View Mode Toggle */}
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <div className="flex items-center gap-1 p-1 bg-slate-900 rounded-lg border border-slate-800 text-[11px] font-mono">
                     <button
                       onClick={() => setViewMode('side-by-side')}
                       className={`px-3 py-1 rounded-md font-semibold transition-colors flex items-center gap-1.5 ${
-                        viewMode === 'side-by-side'
-                          ? 'bg-cyan-500 text-slate-950 shadow-sm'
-                          : 'text-slate-400 hover:text-white'
+                        viewMode === 'side-by-side' ? 'bg-cyan-500 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-white'
                       }`}
                     >
                       <Columns className="w-3 h-3" />
-                      <span>Song Song (Top & Bottom)</span>
+                      <span>Song Song</span>
                     </button>
                     <button
                       onClick={() => setViewMode('top')}
@@ -598,79 +556,145 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
                     >
                       Mặt Dưới
                     </button>
+                    <button
+                      onClick={() => setViewMode('3d')}
+                      className={`px-2.5 py-1 rounded-md transition-colors flex items-center gap-1.5 ${
+                        viewMode === '3d' ? 'bg-cyan-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <Box className="w-3 h-3" />
+                      <span>3D</span>
+                    </button>
                   </div>
 
-                  {/* Zoom Controls */}
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => setZoom(prev => Math.min(prev + 0.15, 2.5))}
-                      className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-white"
-                      title="Phóng to"
-                    >
-                      <ZoomIn className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => setZoom(prev => Math.max(prev - 0.15, 0.5))}
-                      className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-white"
-                      title="Thu nhỏ"
-                    >
-                      <ZoomOut className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => {
-                        setZoom(1);
-                        setPanOffset({ x: 0, y: 0 });
-                      }}
-                      className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-white"
-                      title="Đặt lại góc nhìn"
-                    >
-                      <RefreshCw className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
+                  {viewMode === '3d' ? (
+                    <div className="flex items-center gap-1 p-1 bg-slate-900 rounded-lg border border-slate-800 text-[11px] font-mono">
+                      {([['iso', 'Góc nghiêng'], ['top', 'Nhìn trên'], ['bottom', 'Nhìn dưới']] as const).map(([key, label]) => (
+                        <button
+                          key={key}
+                          onClick={() => {
+                            setCameraPreset(key);
+                            setCameraResetKey(k => k + 1);
+                          }}
+                          className={`px-2.5 py-1 rounded-md transition-colors ${
+                            cameraPreset === key ? 'bg-slate-700 text-white font-bold' : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => zoomBy(1.25)}
+                        className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-white"
+                        title="Phóng to"
+                      >
+                        <ZoomIn className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => zoomBy(0.8)}
+                        className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-white"
+                        title="Thu nhỏ"
+                      >
+                        <ZoomOut className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                  <button
+                    onClick={resetView}
+                    className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-white"
+                    title="Đặt lại góc nhìn"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
 
-              {/* Canvas Viewport */}
-              <div className="relative aspect-16/9 sm:aspect-21/9 w-full overflow-hidden bg-slate-100 cursor-grab active:cursor-grabbing">
-                <canvas
-                  ref={canvasRef}
-                  width={960}
-                  height={420}
-                  className="w-full h-full object-contain"
-                  onMouseDown={handleMouseDown}
-                  onMouseMove={handleMouseMove}
-                  onMouseUp={handleMouseUp}
-                  onMouseLeave={handleMouseUp}
-                />
+              {/* Viewport */}
+              <div
+                ref={viewportRef}
+                className={`relative aspect-[4/3] sm:aspect-[16/9] lg:aspect-[21/9] w-full overflow-hidden touch-none ${
+                  viewMode === '3d'
+                    ? 'bg-gradient-to-b from-slate-700 via-slate-800 to-slate-950'
+                    : 'bg-slate-100 cursor-grab active:cursor-grabbing'
+                }`}
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                onPointerCancel={handlePointerUp}
+              >
+                {viewMode === '3d' ? (
+                  <Suspense
+                    fallback={
+                      <div className="absolute inset-0 flex items-center justify-center text-cyan-300 text-xs font-mono gap-2">
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Đang tải trình xem 3D...</span>
+                      </div>
+                    }
+                  >
+                    <Board3DView
+                      board={parsedBoard.render}
+                      thicknessMm={parseFloat(pcbThickness) || 1.6}
+                      edgeColor={MASK_COLORS[selectedColor].edge}
+                      preset={cameraPreset}
+                      resetKey={cameraResetKey}
+                    />
+                  </Suspense>
+                ) : (
+                  <div
+                    className="absolute inset-0 flex items-stretch gap-8 p-6 sm:p-10"
+                    style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}
+                  >
+                    {viewMode !== 'bottom' && boardImage(topUrl, 'TOP LAYER (Mặt Trên)')}
+                    {viewMode !== 'top' && boardImage(bottomUrl, 'BOTTOM LAYER (Mặt Dưới, nhìn từ dưới lên)')}
+                  </div>
+                )}
 
-                {/* Instruction tooltip */}
-                <div className="absolute top-3 left-3 text-[11px] font-mono text-slate-600 bg-white/90 shadow px-2.5 py-1 rounded-md border border-slate-300 pointer-events-none">
-                  Kéo chuột để di chuyển (Pan) · Cuộn chuột hoặc nút kính lúp để Phóng to/Thu nhỏ (Zoom)
+                <div className={`absolute top-3 left-3 text-[11px] font-mono shadow px-2.5 py-1 rounded-md border pointer-events-none ${
+                  viewMode === '3d' ? 'text-slate-200 bg-slate-900/80 border-slate-700' : 'text-slate-600 bg-white/90 border-slate-300'
+                }`}>
+                  {viewMode === '3d'
+                    ? 'Kéo chuột trái để xoay · Chuột phải để di chuyển · Cuộn để phóng to/thu nhỏ'
+                    : 'Kéo chuột để di chuyển (Pan) · Cuộn chuột hoặc nút kính lúp để Phóng to/Thu nhỏ (Zoom)'}
                 </div>
+                {viewMode !== '3d' && (
+                  <div className="absolute bottom-3 right-3 text-[11px] font-mono text-slate-500 bg-white/80 px-2 py-0.5 rounded pointer-events-none">
+                    {Math.round(view.zoom * 100)}%
+                  </div>
+                )}
               </div>
 
               {/* Layer list details drawer */}
               <div className="p-4 bg-slate-950 border-t border-slate-800">
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                   <span className="text-xs font-bold text-slate-300 font-mono flex items-center gap-1.5">
                     <Layers className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Các Lớp Bo Mạch Được Phát Hiện Trong Tệp ({parsedBoard.layersDetected.length} lớp):</span>
+                    <span>Các lớp trong tệp ({usedLayers.length} lớp Gerber/Drill{ignoredCount > 0 ? `, ${ignoredCount} tệp khác bỏ qua` : ''}):</span>
                   </span>
                   <span className="text-[11px] text-cyan-400 font-mono">
-                    {parsedBoard.drills.length || 156} Lỗ Khoan (Drills) · Chuẩn RS-274X
+                    {hasDrill
+                      ? `${parsedBoard.holeCount} lỗ khoan${parsedBoard.minHoleMm ? ` · lỗ nhỏ nhất Ø${parsedBoard.minHoleMm.toFixed(2)} mm` : ''}`
+                      : 'Không có tệp khoan'}
+                    {parsedBoard.outlineFile && ` · Outline: ${baseName(parsedBoard.outlineFile)}`}
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-2 text-[11px] font-mono">
-                  {parsedBoard.layersDetected.map((layer, idx) => (
-                    <div
-                      key={idx}
-                      className="px-2.5 py-1 rounded-md bg-slate-900 border border-slate-800 text-slate-300 flex items-center gap-1.5"
-                    >
-                      <span className="w-2 h-2 rounded-full bg-cyan-400" />
-                      <span>{layer.name}</span>
-                      <span className="text-slate-500 font-normal">({layer.itemsCount} vectors)</span>
-                    </div>
-                  ))}
+                  {usedLayers.map((layer) => {
+                    const st = STATUS_STYLE[layer.status];
+                    return (
+                      <div
+                        key={layer.fileName}
+                        title={layer.fileName}
+                        className="px-2.5 py-1 rounded-md bg-slate-900 border border-slate-800 flex items-center gap-1.5"
+                      >
+                        <span className={`w-2 h-2 rounded-full ${st.dot}`} />
+                        <span className={st.text}>{layer.label}</span>
+                        <span className="text-slate-500 font-normal">{baseName(layer.fileName)}{st.note && ` · ${st.note}`}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -715,7 +739,7 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
                   Số lớp mạch (Layers):
                 </div>
                 <div className="md:col-span-9 flex flex-wrap items-center gap-2">
-                  {[1, 2, 4, 6, 8, 10, 12, 14, 16].map((l) => (
+                  {LAYER_OPTIONS.map((l) => (
                     <button
                       key={l}
                       type="button"
@@ -729,7 +753,9 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
                       {l}
                     </button>
                   ))}
-                  <span className="text-[11px] font-mono text-cyan-400 ml-2">High Precision Multilayer</span>
+                  <span className="text-[11px] font-mono text-cyan-400 ml-2">
+                    Phát hiện {parsedBoard.copperLayerCount} lớp đồng trong tệp
+                  </span>
                 </div>
               </div>
 
@@ -738,7 +764,7 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
                 <div className="md:col-span-3 font-semibold text-slate-300">
                   Kích thước bo (Dimensions):
                 </div>
-                <div className="md:col-span-9 flex items-center gap-3">
+                <div className="md:col-span-9 flex flex-wrap items-center gap-3">
                   <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5">
                     <input
                       type="number"
@@ -772,9 +798,9 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
                   Màu sơn phủ hàn (PCB Color):
                 </div>
                 <div className="md:col-span-9 flex flex-wrap gap-2.5">
-                  {(['green', 'purple', 'red', 'yellow', 'blue', 'white', 'black'] as SolderMaskColor[]).map((cKey) => {
+                  {(Object.keys(MASK_COLORS) as SolderMaskColor[]).map((cKey) => {
                     const isSelected = selectedColor === cKey;
-                    const c = colorPalettes[cKey];
+                    const c = MASK_COLORS[cKey];
                     return (
                       <button
                         key={cKey}
@@ -788,7 +814,7 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
                       >
                         <span
                           className="w-3.5 h-3.5 rounded-full border border-white/20"
-                          style={{ backgroundColor: c.bg }}
+                          style={{ backgroundColor: c.swatch }}
                         />
                         <span>{c.label}</span>
                       </button>
@@ -805,7 +831,7 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
                 <div className="md:col-span-9 flex flex-wrap gap-2">
                   {(['OSP', 'HASL', 'LeadFree_HASL', 'ENIG'] as SurfaceFinish[]).map((fKey) => {
                     const isSelected = selectedFinish === fKey;
-                    const f = finishPads[fKey];
+                    const f = FINISHES[fKey];
                     return (
                       <button
                         key={fKey}
@@ -819,7 +845,7 @@ export const GerberViewer: React.FC<GerberViewerProps> = ({ onApplyToQuote }) =>
                       >
                         <span
                           className="w-3 h-3 rounded-full border border-black/40"
-                          style={{ backgroundColor: f.padFill }}
+                          style={{ backgroundColor: f.cf }}
                         />
                         <span>{f.label}</span>
                       </button>
