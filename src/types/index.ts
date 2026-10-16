@@ -61,4 +61,6 @@ export interface CompanySettings {
   zaloUrl: string;
   techStandards: string;
   taxCode: string;
+  /** Ảnh lớn ở đầu trang chủ */
+  heroImageUrl?: string;
 }
