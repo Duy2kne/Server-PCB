@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Send, UploadCloud, FileText, CheckCircle2, AlertCircle, X, Shield, Phone, Mail, MapPin } from 'lucide-react';
 import { CompanySettings, AttachedFile, QuoteRequest } from '../types';
 import { StorageService } from '../services/storage';
-import { sendQuoteEmail } from '../services/email';
+import { MAX_QUOTE_FILES, MAX_QUOTE_TOTAL_BYTES, canSendFiles, sendQuoteEmail } from '../services/email';
 
 export interface GerberConfigData {
   fileName: string;
@@ -13,7 +13,27 @@ export interface GerberConfigData {
   layers: number;
   quantity: number;
   estimatedPriceVnd: number;
+  /** Tệp Gerber thật khách đã nạp trong trình xem (được gửi kèm yêu cầu) */
+  files?: File[];
 }
+
+/** Tệp trong form: thông tin hiển thị + nội dung thật để gửi đi */
+type PendingFile = AttachedFile & { file?: File };
+
+const formatFileSize = (bytes: number) =>
+  bytes > 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(2)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+
+const toPendingFile = (file: File): PendingFile => ({
+  name: file.name,
+  size: formatFileSize(file.size),
+  type: file.type || 'application/octet-stream',
+  file,
+});
+
+const gerberFiles = (config: GerberConfigData): PendingFile[] =>
+  config.files?.length
+    ? config.files.map(toPendingFile)
+    : [{ name: config.fileName, size: '—', type: 'application/zip' }];
 
 interface QuoteSectionProps {
   settings: CompanySettings;
@@ -50,18 +70,9 @@ export const QuoteSection: React.FC<QuoteSectionProps> = ({
     }
     return '';
   });
-  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>(() => {
-    if (prefilledGerberConfig) {
-      return [
-        {
-          name: prefilledGerberConfig.fileName,
-          size: '4.2 MB',
-          type: 'application/zip',
-        },
-      ];
-    }
-    return [];
-  });
+  const [attachedFiles, setAttachedFiles] = useState<PendingFile[]>(() =>
+    prefilledGerberConfig ? gerberFiles(prefilledGerberConfig) : []
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedQuote, setSubmittedQuote] = useState<QuoteRequest | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
@@ -75,54 +86,31 @@ export const QuoteSection: React.FC<QuoteSectionProps> = ({
         `Gia công PCB theo tệp Gerber: ${prefilledGerberConfig.fileName}\n- Kích thước: ${prefilledGerberConfig.width} × ${prefilledGerberConfig.height} mm\n- Màu sơn hàn: ${prefilledGerberConfig.color.toUpperCase()}\n- Mạ tiếp điểm: ${prefilledGerberConfig.finish}\n- Số lớp: ${prefilledGerberConfig.layers} lớp\n- Ước tính chi phí sơ bộ: ${prefilledGerberConfig.estimatedPriceVnd.toLocaleString('vi-VN')} VND`
       );
       setAttachedFiles((prev) => {
-        const exists = prev.some((f) => f.name === prefilledGerberConfig.fileName);
-        if (exists) return prev;
-        return [
-          ...prev,
-          {
-            name: prefilledGerberConfig.fileName,
-            size: '4.2 MB',
-            type: 'application/zip',
-          },
-        ];
+        const incoming = gerberFiles(prefilledGerberConfig);
+        const names = new Set(incoming.map((f) => f.name));
+        return [...prev.filter((f) => !names.has(f.name)), ...incoming];
       });
     }
   }, [prefilledGerberConfig]);
 
-  // Handle file upload simulation (can accept real files or provide sample uploads)
+  // Nhận tệp thật từ máy khách (giới hạn số lượng / tổng dung lượng theo khả năng gửi email)
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const filesArray = Array.from(e.target.files);
-      const newFiles: AttachedFile[] = filesArray.map(f => {
-        const sizeMb = (f.size / (1024 * 1024)).toFixed(2);
-        const sizeKb = (f.size / 1024).toFixed(0);
-        return {
-          name: f.name,
-          size: f.size > 1024 * 1024 ? `${sizeMb} MB` : `${sizeKb} KB`,
-          type: f.type || 'application/octet-stream',
-        };
-      });
-      setAttachedFiles(prev => [...prev, ...newFiles]);
-    }
-  };
+    const picked = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    if (picked.length === 0) return;
+    setErrorMessage('');
 
-  const handleAddSampleFile = (type: 'gerber' | 'bom' | 'spec') => {
-    if (type === 'gerber') {
-      setAttachedFiles(prev => [
-        ...prev,
-        { name: 'Gerber_Archive_Design_v1.zip', size: '4.8 MB', type: 'application/zip' }
-      ]);
-    } else if (type === 'bom') {
-      setAttachedFiles(prev => [
-        ...prev,
-        { name: 'BOM_Component_List.xlsx', size: '320 KB', type: 'application/vnd.ms-excel' }
-      ]);
-    } else {
-      setAttachedFiles(prev => [
-        ...prev,
-        { name: 'Technical_Specification_Doc.pdf', size: '1.2 MB', type: 'application/pdf' }
-      ]);
+    const next = [...attachedFiles.filter(f => !picked.some(p => p.name === f.name)), ...picked.map(toPendingFile)];
+    const totalBytes = next.reduce((sum, f) => sum + (f.file?.size ?? 0), 0);
+    if (next.length > MAX_QUOTE_FILES) {
+      setErrorMessage(`Tối đa ${MAX_QUOTE_FILES} tệp cho mỗi yêu cầu. Hãy nén các tệp thành 1 file .zip.`);
+      return;
     }
+    if (totalBytes > MAX_QUOTE_TOTAL_BYTES) {
+      setErrorMessage(`Tổng dung lượng tệp ${formatFileSize(totalBytes)} vượt giới hạn 25 MB. Tệp lớn hơn vui lòng gửi qua email ${settings.email} hoặc Zalo.`);
+      return;
+    }
+    setAttachedFiles(next);
   };
 
   const removeFile = (index: number) => {
@@ -151,11 +139,11 @@ export const QuoteSection: React.FC<QuoteSectionProps> = ({
         quantityEstimate: quantityEstimate.trim() || 'Thỏa thuận theo dự án',
         timeline,
         requirements: requirements.trim() || 'Khách hàng yêu cầu tư vấn kỹ thuật tổng quan.',
-        attachedFiles,
+        attachedFiles: attachedFiles.map(({ file: _file, ...meta }) => meta),
       });
 
-      // Gửi về email chủ website; lỗi thì giữ nguyên form để khách gửi lại hoặc gọi hotline
-      await sendQuoteEmail(newQuote);
+      // Gửi về email chủ website (kèm tệp); lỗi thì giữ nguyên form để khách gửi lại hoặc gọi hotline
+      await sendQuoteEmail(newQuote, attachedFiles.flatMap(f => (f.file ? [f.file] : [])));
 
       setSubmittedQuote(newQuote);
       // Reset fields
@@ -399,31 +387,11 @@ export const QuoteSection: React.FC<QuoteSectionProps> = ({
                         onChange={handleFileUpload}
                       />
                     </label>
-                    <span className="text-slate-500"> hoặc tải tệp mẫu thử nghiệm:</span>
                   </div>
-
-                  <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleAddSampleFile('gerber')}
-                      className="text-[11px] font-mono px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
-                    >
-                      + Gerber_Sample.zip
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleAddSampleFile('bom')}
-                      className="text-[11px] font-mono px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
-                    >
-                      + BOM_Components.xlsx
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleAddSampleFile('spec')}
-                      className="text-[11px] font-mono px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
-                    >
-                      + Spec_Doc.pdf
-                    </button>
+                  <div className="mt-1 text-[11px] text-slate-500">
+                    {canSendFiles()
+                      ? `Tối đa ${MAX_QUOTE_FILES} tệp, tổng 25 MB. Tệp được gửi bảo mật tới kỹ sư DY AUTOMATION.`
+                      : `Sau khi gửi, vui lòng gửi tệp qua email ${settings.email} hoặc Zalo.`}
                   </div>
 
                   {onOpenGerberViewer && (
