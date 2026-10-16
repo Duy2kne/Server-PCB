@@ -19,7 +19,7 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
   const [priceEstimate, setPriceEstimate] = useState('Liên hệ báo giá kỹ thuật');
   const [shortDesc, setShortDesc] = useState('');
   const [fullDesc, setFullDesc] = useState('');
-  const [imageUrl, setImageUrl] = useState('/src/assets/images/chiller_esp32_board_1792125857487.jpg');
+  const [imageUrl, setImageUrl] = useState('images/chiller_esp32_board_1792125857487.jpg');
   const [specs, setSpecs] = useState<ProductSpec[]>([
     { key: 'Vi điều khiển / CPU', value: '32-bit MCU' },
     { key: 'Điện áp cấp', value: '12V - 24V DC' },
@@ -32,11 +32,11 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
 
   // Sample preset images generated for DY AUTOMATION
   const presetImages = [
-    { label: 'Chiller Mini ESP32', url: '/src/assets/images/chiller_esp32_board_1792125857487.jpg' },
-    { label: 'Boiler Nồi hơi 2 que dò', url: '/src/assets/images/boiler_controller_pcb_1792125859286.jpg' },
-    { label: 'IoT Gateway RS485 Modbus', url: '/src/assets/images/automation_software_pcb_1792125859834.jpg' },
-    { label: 'Automation Web/PC System', url: '/src/assets/images/automation_software_pcb_1792125859834.jpg' },
-    { label: 'SMT Line & PCB Layout', url: '/src/assets/images/hero_pcb_automation_1792125856876.jpg' },
+    { label: 'Chiller Mini ESP32', url: 'images/chiller_esp32_board_1792125857487.jpg' },
+    { label: 'Boiler Nồi hơi 2 que dò', url: 'images/boiler_controller_pcb_1792125859286.jpg' },
+    { label: 'IoT Gateway RS485 Modbus', url: 'images/automation_software_pcb_1792125859834.jpg' },
+    { label: 'Automation Web/PC System', url: 'images/automation_software_pcb_1792125859834.jpg' },
+    { label: 'SMT Line & PCB Layout', url: 'images/hero_pcb_automation_1792125856876.jpg' },
   ];
 
   useEffect(() => {
@@ -229,7 +229,7 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                 type="text"
                 value={imageUrl}
                 onChange={(e) => setImageUrl(e.target.value)}
-                placeholder="URL hình ảnh (/src/assets/... hoặc https://...)"
+                placeholder="URL hình ảnh (images/... hoặc https://...)"
                 className="flex-1 px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-300 font-mono text-[11px] focus:outline-none focus:border-cyan-500"
               />
               {imageUrl && (
