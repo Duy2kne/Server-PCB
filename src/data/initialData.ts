@@ -199,7 +199,7 @@ export const INITIAL_SETTINGS: CompanySettings = {
   addressHanoi: 'TBU',
   addressHcm: 'Số 247 Hiền Vương, Phường Phú Thạnh, TP. Hồ Chí Minh',
   workingHours: 'Thứ 2 - Thứ 7: 08:00 - 18:00 (Hỗ trợ khẩn cấp 24/7)',
-  zaloUrl: 'https://zalo.me/0986234568',
+  zaloUrl: 'https://zalo.me/0984024042',
   techStandards: 'IPC-A-610 Class 2 & 3 · ISO 9001:2015 · RoHS Compliant',
   taxCode: '0109988776'
 };
