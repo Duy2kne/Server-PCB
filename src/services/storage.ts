@@ -128,7 +128,8 @@ export const StorageService = {
         localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(INITIAL_SETTINGS));
         return INITIAL_SETTINGS;
       }
-      return JSON.parse(data);
+      // Gộp với mặc định để bản lưu cũ vẫn có các trường mới (vd. heroImageUrl)
+      return { ...INITIAL_SETTINGS, ...JSON.parse(data) };
     } catch {
       return INITIAL_SETTINGS;
     }
