@@ -18,10 +18,13 @@ import { GerberConfigData } from './components/QuoteSection';
 import { Footer } from './components/Footer';
 import { ProductDetailModal } from './components/ProductDetailModal';
 import { AdminDashboard } from './components/admin/AdminDashboard';
+import { AdminLogin } from './components/admin/AdminLogin';
+import { AuthService } from './services/auth';
 import { MessageSquare, ArrowUp, Phone } from 'lucide-react';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<'client' | 'admin'>('client');
+  const [isAdminAuthed, setIsAdminAuthed] = useState(() => AuthService.isLoggedIn());
   const [products, setProducts] = useState<Product[]>([]);
   const [quotes, setQuotes] = useState<QuoteRequest[]>([]);
   const [settings, setSettings] = useState<CompanySettings>(StorageService.getSettings());
@@ -176,14 +179,27 @@ export default function App() {
             </a>
           </aside>
         </>
-      ) : (
+      ) : isAdminAuthed && AuthService.isLoggedIn() ? (
         /* Admin Dashboard View */
         <AdminDashboard
           products={products}
           quotes={quotes}
           settings={settings}
           onNavigateClient={() => setCurrentView('client')}
+          onLogout={() => {
+            AuthService.logout();
+            setIsAdminAuthed(false);
+            setCurrentView('client');
+          }}
           onRefreshData={loadData}
+        />
+      ) : (
+        <AdminLogin
+          onSuccess={() => setIsAdminAuthed(true)}
+          onCancel={() => {
+            if (window.location.hash === '#admin') history.replaceState(null, '', window.location.pathname);
+            setCurrentView('client');
+          }}
         />
       )}
 
