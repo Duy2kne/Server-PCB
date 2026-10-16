@@ -20,6 +20,7 @@ import { ProductDetailModal } from './components/ProductDetailModal';
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { AdminLogin } from './components/admin/AdminLogin';
 import { AuthService } from './services/auth';
+import { syncPublishedContent } from './services/content';
 import { MessageSquare, ArrowUp, Phone } from 'lucide-react';
 
 export default function App() {
@@ -44,6 +45,8 @@ export default function App() {
 
   useEffect(() => {
     loadData();
+    // Nội dung admin đã xuất bản lên GitHub (sản phẩm, cấu hình) ghi đè bản mặc định
+    syncPublishedContent();
 
     // Check if initial URL contains /admin or #admin
     if (window.location.pathname.includes('/admin') || window.location.hash === '#admin') {
@@ -114,6 +117,7 @@ export default function App() {
               onQuoteClick={() => handleNavigateSection('contact')}
               onExploreClick={() => handleNavigateSection('portfolio')}
               onGerberViewerClick={() => handleNavigateSection('gerber-viewer')}
+              imageUrl={settings.heroImageUrl}
             />
 
             {/* Core Services Section */}
