@@ -1,0 +1,6 @@
+{
+  "name": "DY AUTOMATION - Giải Pháp Phần Cứng & Tự Động Hóa",
+  "description": "Nền tảng giải pháp trọn gói từ Thiết kế Hardware, Sản xuất PCB/PCBA đến Tool Automation & Validation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
